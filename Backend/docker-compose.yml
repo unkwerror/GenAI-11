@@ -1,0 +1,123 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: calendar_db
+    environment:
+      POSTGRES_USER: calendar_user
+      POSTGRES_PASSWORD: password123
+      POSTGRES_DB: calendar_db
+    ports:
+      - "5433:5432"
+    volumes:
+      - ./data/postgres:/var/lib/postgresql/data
+    networks:
+      - calendar_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U calendar_user -d calendar_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis Cache
+  redis:
+    image: redis:7-alpine
+    container_name: calendar_redis
+    ports:
+      - "6379:6379"
+    networks:
+      - calendar_network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Auth Service
+  auth-service:
+    build:
+      context: .
+      dockerfile: ./auth-service/Dockerfile
+    container_name: auth_service
+    environment:
+      DATABASE_URL: postgresql://calendar_user:password123@postgres:5432/calendar_db
+      JWT_SECRET: your-secret-key-change-in-production
+      JWT_ALGORITHM: HS256
+      JWT_EXPIRATION: 3600
+      JWT_REFRESH_EXPIRATION: 604800
+      ENVIRONMENT: production
+    ports:
+      - "8001:8001"
+    networks:
+      - calendar_network
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: uvicorn main:app --host 0.0.0.0 --port 8001
+
+  # Events Service
+  events-service:
+    build:
+      context: .
+      dockerfile: ./events-service/Dockerfile
+    container_name: events_service
+    environment:
+      DATABASE_URL: postgresql://calendar_user:password123@postgres:5432/calendar_db
+      JWT_SECRET: your-secret-key-change-in-production
+      ENVIRONMENT: production
+    ports:
+      - "8002:8002"
+    networks:
+      - calendar_network
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: uvicorn main:app --host 0.0.0.0 --port 8002
+
+  # Todos Service
+  todos-service:
+    build:
+      context: .
+      dockerfile: ./todos-service/Dockerfile
+    container_name: todos_service
+    environment:
+      DATABASE_URL: postgresql://calendar_user:password123@postgres:5432/calendar_db
+      JWT_SECRET: your-secret-key-change-in-production
+      ENVIRONMENT: production
+    ports:
+      - "8003:8003"
+    networks:
+      - calendar_network
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: uvicorn main:app --host 0.0.0.0 --port 8003
+
+  # API Gateway
+  api-gateway:
+    build:
+      context: .
+      dockerfile: ./api-gateway/Dockerfile
+    container_name: api_gateway
+    environment:
+      AUTH_SERVICE_URL: http://auth-service:8001
+      EVENTS_SERVICE_URL: http://events-service:8002
+      TODOS_SERVICE_URL: http://todos-service:8003
+      ENVIRONMENT: production
+    ports:
+      - "8000:8000"
+    networks:
+      - calendar_network
+    depends_on:
+      - auth-service
+      - events-service
+      - todos-service
+    command: uvicorn main:app --host 0.0.0.0 --port 8000
+
+networks:
+  calendar_network:
+    driver: bridge
+
+
